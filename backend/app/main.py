@@ -12,7 +12,7 @@ from datetime import datetime
 import os
 from dotenv import load_dotenv
 
-from .database import get_db, init_db
+from .database import get_db, init_db, SessionLocal
 from .models import User, Channel, Message, File as FileModel
 from .schemas import (
     UserCreate, UserResponse, ChannelCreate, ChannelResponse,
@@ -47,21 +47,23 @@ app.add_middleware(
 async def startup_event():
     init_db()
     # Create default channel if it doesn't exist
-    db = next(get_db())
-    default_channel = db.query(Channel).filter(Channel.name == "general").first()
-    if not default_channel:
-        # Create a system user first
-        system_user = db.query(User).filter(User.username == "system").first()
-        if not system_user:
-            system_user = User(username="system", is_online=False)
-            db.add(system_user)
+    db = SessionLocal()
+    try:
+        default_channel = db.query(Channel).filter(Channel.name == "general").first()
+        if not default_channel:
+            # Create a system user first
+            system_user = db.query(User).filter(User.username == "system").first()
+            if not system_user:
+                system_user = User(username="system", is_online=False)
+                db.add(system_user)
+                db.commit()
+                db.refresh(system_user)
+            
+            default_channel = Channel(name="general", description="General discussion", created_by=system_user.id)
+            db.add(default_channel)
             db.commit()
-            db.refresh(system_user)
-        
-        default_channel = Channel(name="general", description="General discussion", created_by=system_user.id)
-        db.add(default_channel)
-        db.commit()
-    db.close()
+    finally:
+        db.close()
 
 
 # ==================== REST API Endpoints ====================
@@ -106,7 +108,7 @@ async def get_user(user_id: int, db: Session = Depends(get_db)):
 
 # Channel Endpoints
 @app.post("/api/channels", response_model=ChannelResponse)
-async def create_channel(channel: ChannelCreate, user_id: int = Form(...), db: Session = Depends(get_db)):
+async def create_channel(channel: ChannelCreate, db: Session = Depends(get_db)):
     """Create a new channel."""
     # Check if channel name already exists
     existing_channel = db.query(Channel).filter(Channel.name == channel.name).first()
@@ -116,7 +118,7 @@ async def create_channel(channel: ChannelCreate, user_id: int = Form(...), db: S
     new_channel = Channel(
         name=channel.name,
         description=channel.description,
-        created_by=user_id
+        created_by=channel.user_id
     )
     db.add(new_channel)
     db.commit()
@@ -129,6 +131,15 @@ async def get_channels(db: Session = Depends(get_db)):
     """Get all channels."""
     channels = db.query(Channel).all()
     return channels
+
+
+@app.get("/api/channels/{channel_id}", response_model=ChannelResponse)
+async def get_channel(channel_id: int, db: Session = Depends(get_db)):
+    """Get a specific channel."""
+    channel = db.query(Channel).filter(Channel.id == channel_id).first()
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    return channel
 
 
 # Message Endpoints
@@ -209,60 +220,80 @@ async def download_file(file_id: int, db: Session = Depends(get_db)):
 # ==================== WebSocket Endpoints ====================
 
 @app.websocket("/ws/chat/{user_id}")
-async def websocket_chat_endpoint(websocket: WebSocket, user_id: int, db: Session = Depends(get_db)):
+async def websocket_chat_endpoint(websocket: WebSocket, user_id: int):
     """WebSocket endpoint for real-time chat."""
-    # Get user info
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        await websocket.close(code=4004, reason="User not found")
+    print(f"WebSocket connection attempt for user_id: {user_id}")
+    username = ""
+    
+    # Initial connection - check user and update status
+    try:
+        with SessionLocal() as db:
+            print(f"Checking if user {user_id} exists...")
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                print(f"User {user_id} not found. Closing connection.")
+                await websocket.close(code=4004, reason="User not found")
+                return
+            
+            username = user.username
+            print(f"User found: {username}. Updating status...")
+            user.is_online = True
+            user.last_seen = datetime.utcnow()
+            db.commit()
+    except Exception as e:
+        print(f"Error during user check/update: {e}")
+        await websocket.close(code=1011, reason="Internal Server Error")
         return
     
-    # Update user status
-    user.is_online = True
-    user.last_seen = datetime.utcnow()
-    db.commit()
-    
     # Connect to WebSocket manager
-    await manager.connect(websocket, user_id, user.username)
+    print(f"Connecting to manager for {username}...")
+    await manager.connect(websocket, user_id, username)
+    print(f"Connected to manager. Starting receive loop...")
     
     try:
         while True:
             # Receive message from client
             data = await websocket.receive_text()
+            print(f"Received data from {username}: {data[:50]}...") # Log first 50 chars
             message_data = json.loads(data)
             
             message_type = message_data.get("type")
             
             if message_type == "message":
-                # Save message to database
+                # Save message to database with short-lived session
                 content = message_data.get("content", "")
                 channel_id = message_data.get("channel_id", 1)
                 file_id = message_data.get("file_id")
                 msg_type = message_data.get("message_type", "text")
                 
-                new_message = Message(
-                    user_id=user_id,
-                    channel_id=channel_id,
-                    content=content,
-                    message_type=msg_type,
-                    file_id=file_id
-                )
-                db.add(new_message)
-                db.commit()
-                db.refresh(new_message)
+                broadcast_msg = {}
+                
+                with SessionLocal() as db:
+                    new_message = Message(
+                        user_id=user_id,
+                        channel_id=channel_id,
+                        content=content,
+                        message_type=msg_type,
+                        file_id=file_id
+                    )
+                    db.add(new_message)
+                    db.commit()
+                    db.refresh(new_message)
+                    
+                    broadcast_msg = {
+                        "type": "message",
+                        "id": new_message.id,
+                        "user_id": user_id,
+                        "username": username,
+                        "channel_id": channel_id,
+                        "content": content,
+                        "message_type": msg_type,
+                        "file_id": file_id,
+                        "timestamp": new_message.created_at.isoformat()
+                    }
                 
                 # Broadcast message to all users
-                await manager.broadcast({
-                    "type": "message",
-                    "id": new_message.id,
-                    "user_id": user_id,
-                    "username": user.username,
-                    "channel_id": channel_id,
-                    "content": content,
-                    "message_type": msg_type,
-                    "file_id": file_id,
-                    "timestamp": new_message.created_at.isoformat()
-                })
+                await manager.broadcast(broadcast_msg)
             
             elif message_type == "typing":
                 # Broadcast typing indicator
@@ -271,22 +302,38 @@ async def websocket_chat_endpoint(websocket: WebSocket, user_id: int, db: Sessio
                 await manager.set_typing(user_id, channel_id, is_typing)
     
     except WebSocketDisconnect:
-        # Update user status
-        user.is_online = False
-        user.last_seen = datetime.utcnow()
-        db.commit()
+        print(f"WebSocket disconnected for {username}")
+        # Update user status with short-lived session
+        try:
+            with SessionLocal() as db:
+                user = db.query(User).filter(User.id == user_id).first()
+                if user:
+                    user.is_online = False
+                    user.last_seen = datetime.utcnow()
+                    db.commit()
+        except Exception as e:
+             print(f"Error updating disconnect status: {e}")
         
         # Disconnect from manager
-        username = manager.disconnect(user_id)
+        disconnected_username = manager.disconnect(user_id)
         
         # Notify others
         await manager.broadcast({
             "type": "user_left",
             "user_id": user_id,
-            "username": username,
+            "username": disconnected_username,
             "timestamp": datetime.utcnow().isoformat(),
             "online_users": manager.get_online_users()
         })
+    except Exception as e:
+        print(f"Unexpected error in WebSocket loop for {username}: {e}")
+        # Try to close if still open
+        try:
+            await websocket.close()
+        except:
+            pass
+        # Ensure cleanup happens even if non-disconnect error
+        manager.disconnect(user_id)
 
 
 @app.websocket("/ws/webrtc/{room_id}/{user_id}")

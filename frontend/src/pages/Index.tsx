@@ -7,7 +7,7 @@ import { useUser } from '@/lib/userStore';
 
 const Index = () => {
   const { currentUser, isLoading } = useUser();
-  const [selectedChannel, setSelectedChannel] = useState<string | null>('general');
+  const [selectedChannel, setSelectedChannel] = useState<string | null>('1');
   const [isCallOpen, setIsCallOpen] = useState(false);
 
   if (isLoading) {

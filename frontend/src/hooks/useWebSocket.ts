@@ -38,25 +38,54 @@ export const useWebSocket = ({
     const [reconnectAttempts, setReconnectAttempts] = useState(0);
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
+    const isIntentionalDisconnect = useRef(false);
+
+    // Use refs for callbacks to avoid re-connecting when they change
+    const onMessageRef = useRef(onMessage);
+    const onConnectRef = useRef(onConnect);
+    const onDisconnectRef = useRef(onDisconnect);
+    const onErrorRef = useRef(onError);
+
+    // Update refs when props change
+    useEffect(() => {
+        onMessageRef.current = onMessage;
+        onConnectRef.current = onConnect;
+        onDisconnectRef.current = onDisconnect;
+        onErrorRef.current = onError;
+    }, [onMessage, onConnect, onDisconnect, onError]);
 
     const connect = useCallback(() => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
+        // Don't connect if no userId provided
+        if (!userId) {
             return;
         }
 
+        // Check if we have an active or connecting socket
+        if (wsRef.current) {
+            if (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) {
+                return;
+            }
+            // Close any other state (CLOSING or CLOSED) just to be safe before overwriting
+            wsRef.current.close();
+        }
+
+        // Reset intentional disconnect flag
+        isIntentionalDisconnect.current = false;
+
+        console.log(`Attempting to connect to WebSocket for user ${userId}...`);
         const ws = new WebSocket(`${WS_BASE_URL}/ws/chat/${userId}`);
 
         ws.onopen = () => {
             console.log('WebSocket connected');
             setIsConnected(true);
             setReconnectAttempts(0);
-            onConnect?.();
+            onConnectRef.current?.();
         };
 
         ws.onmessage = (event) => {
             try {
                 const message: WSMessage = JSON.parse(event.data);
-                onMessage?.(message);
+                onMessageRef.current?.(message);
             } catch (error) {
                 console.error('Failed to parse WebSocket message:', error);
             }
@@ -64,32 +93,40 @@ export const useWebSocket = ({
 
         ws.onerror = (error) => {
             console.error('WebSocket error:', error);
-            onError?.(error);
+            onErrorRef.current?.(error);
         };
 
         ws.onclose = () => {
             console.log('WebSocket disconnected');
             setIsConnected(false);
-            onDisconnect?.();
+            
+            // Only call onDisconnect if we were previously connected
+            if (wsRef.current) {
+                onDisconnectRef.current?.();
+            }
 
-            // Attempt to reconnect with exponential backoff
-            if (reconnectAttempts < 5) {
+            // Attempt to reconnect with exponential backoff ONLY if not intentional
+            if (!isIntentionalDisconnect.current && reconnectAttempts < 5) {
                 const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
                 console.log(`Reconnecting in ${delay}ms...`);
 
                 reconnectTimeoutRef.current = setTimeout(() => {
                     setReconnectAttempts((prev) => prev + 1);
-                    connect();
                 }, delay);
             }
+
+            wsRef.current = null;
         };
 
         wsRef.current = ws;
-    }, [userId, onMessage, onConnect, onDisconnect, onError, reconnectAttempts]);
+    }, [userId, reconnectAttempts]);
 
     const disconnect = useCallback(() => {
+        isIntentionalDisconnect.current = true;
+        
         if (reconnectTimeoutRef.current) {
             clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = undefined;
         }
 
         if (wsRef.current) {
@@ -126,13 +163,16 @@ export const useWebSocket = ({
         });
     }, [sendMessage]);
 
+    // Handle connection/disconnection on mount/unmount/userId change
     useEffect(() => {
-        connect();
+        if (userId) {
+            connect();
+        }
 
         return () => {
             disconnect();
         };
-    }, [connect, disconnect]);
+    }, [userId, connect, disconnect]);
 
     return {
         isConnected,

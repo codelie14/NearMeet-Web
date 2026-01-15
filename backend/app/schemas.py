@@ -26,6 +26,7 @@ class UserResponse(BaseModel):
 class ChannelCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     description: Optional[str] = None
+    user_id: int
 
 
 class ChannelResponse(BaseModel):
