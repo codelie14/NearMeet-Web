@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+websockets
+sqlalchemy
+python-multipart
+cryptography
+python-dotenv
+pydantic
+pydantic-settings
+aiosqlite
+aiofiles

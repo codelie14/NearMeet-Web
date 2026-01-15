@@ -1,0 +1,3 @@
+"""
+NearMeet Backend Package
+"""
