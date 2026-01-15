@@ -1,7 +1,7 @@
 """
 Main FastAPI application for NearMeet backend.
 """
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from .database import get_db, init_db, SessionLocal
 from .models import User, Channel, Message, File as FileModel
 from .schemas import (
-    UserCreate, UserResponse, ChannelCreate, ChannelResponse,
+    UserCreate, UserResponse, UserUpdate, ChannelCreate, ChannelResponse,
     MessageCreate, MessageResponse, FileResponse as FileResponseSchema
 )
 from .websocket_manager import manager
@@ -97,7 +97,75 @@ async def get_users(db: Session = Depends(get_db)):
     return users
 
 
+    return users
+
+
+    return users
+
+
 @app.get("/api/users/{user_id}", response_model=UserResponse)
+async def get_user(user_id: int, db: Session = Depends(get_db)):
+    """Get a specific user."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@app.put("/api/users/{user_id}", response_model=UserResponse)
+async def update_user(user_id: int, user_update: UserUpdate = Body(...), db: Session = Depends(get_db)):
+    """Update user profile."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if user_update.username:
+        # Check uniqueness
+        existing = db.query(User).filter(User.username == user_update.username).first()
+        if existing and existing.id != user_id:
+            raise HTTPException(status_code=400, detail="Username already taken")
+        user.username = user_update.username
+        
+    if user_update.avatar_url is not None:
+        user.avatar_url = user_update.avatar_url
+        
+    if user_update.status:
+        user.status = user_update.status
+        
+    db.commit()
+    db.refresh(user)
+    return user
+async def get_user(user_id: int, db: Session = Depends(get_db)):
+    """Get a specific user."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@app.put("/api/users/{user_id}", response_model=UserResponse)
+async def update_user(user_id: int, user_update: UserUpdate = Body(...), db: Session = Depends(get_db)):
+    """Update user profile."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if user_update.username:
+        # Check uniqueness
+        existing = db.query(User).filter(User.username == user_update.username).first()
+        if existing and existing.id != user_id:
+            raise HTTPException(status_code=400, detail="Username already taken")
+        user.username = user_update.username
+        
+    if user_update.avatar_url is not None:
+        user.avatar_url = user_update.avatar_url
+        
+    if user_update.status:
+        user.status = user_update.status
+        
+    db.commit()
+    db.refresh(user)
+    return user
 async def get_user(user_id: int, db: Session = Depends(get_db)):
     """Get a specific user."""
     user = db.query(User).filter(User.id == user_id).first()
@@ -171,6 +239,29 @@ async def get_messages(channel_id: int, limit: int = 50, offset: int = 0, db: Se
         result.append(msg_dict)
     
     return result
+
+
+@app.delete("/api/messages/{message_id}", status_code=204)
+async def delete_message(message_id: int, db: Session = Depends(get_db)):
+    """Delete a message."""
+    message = db.query(Message).filter(Message.id == message_id).first()
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    
+    # Store channel_id before deletion for broadcasting
+    channel_id = message.channel_id
+    
+    db.delete(message)
+    db.commit()
+    
+    # Broadcast deletion event
+    await manager.broadcast({
+        "type": "message_deleted",
+        "message_id": message_id,
+        "channel_id": channel_id
+    })
+    
+    return None
 
 
 # File Endpoints

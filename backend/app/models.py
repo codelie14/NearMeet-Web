@@ -16,6 +16,8 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     last_seen = Column(DateTime, default=datetime.utcnow)
     is_online = Column(Boolean, default=False)
+    avatar_url = Column(String(500), nullable=True)
+    status = Column(String(20), default="online")  # online, away, busy, offline
 
     # Relationships
     messages = relationship("Message", back_populates="user", cascade="all, delete-orphan")

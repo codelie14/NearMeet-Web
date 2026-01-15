@@ -9,6 +9,7 @@ import {
   MoreVertical,
   Hash,
   FileText,
+  StopCircle,
   Download,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -16,8 +17,11 @@ import { UserAvatar } from './UserAvatar';
 import { MessageContextMenu } from './MessageContextMenu';
 import { useUser } from '@/lib/userStore';
 import { useWebSocket, WSMessage } from '@/hooks/useWebSocket';
-import { api, Message as ApiMessage } from '@/lib/api';
+import { api } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface ChatAreaProps {
   channelId: string | null;
@@ -34,6 +38,8 @@ interface Message {
   created_at: string;
 }
 
+const COMMON_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👋', '🤔', '👀', '🚀', '💯'];
+
 export function ChatArea({ channelId, onStartCall }: ChatAreaProps) {
   const { currentUser } = useUser();
   const { toast } = useToast();
@@ -42,19 +48,25 @@ export function ChatArea({ channelId, onStartCall }: ChatAreaProps) {
   const [typingUsers, setTypingUsers] = useState<Set<number>>(new Set());
   const [onlineUsers, setOnlineUsers] = useState<Array<{ user_id: number; username: string }>>([]);
   const [currentChannel, setCurrentChannel] = useState<{ id: number; name: string } | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout>();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   // WebSocket connection
   const { isConnected, sendChatMessage, sendTypingIndicator } = useWebSocket({
     userId: currentUser?.id || 0,
     onMessage: handleWebSocketMessage,
     onConnect: () => {
-      toast({ title: 'Connecté', description: 'Connexion au chat établie' });
+      // toast({ title: 'Connecté', description: 'Connexion au chat établie' });
+      loadChannelDetails();
       loadMessageHistory();
     },
     onDisconnect: () => {
-      toast({ title: 'Déconnecté', description: 'Connexion au chat perdue', variant: 'destructive' });
+      // toast({ title: 'Déconnecté', description: 'Connexion au chat perdue', variant: 'destructive' });
     },
   });
 
@@ -72,10 +84,6 @@ export function ChatArea({ channelId, onStartCall }: ChatAreaProps) {
       setMessages((prev) => [...prev, newMsg]);
     } else if (message.type === 'user_joined') {
       setOnlineUsers(message.online_users || []);
-      toast({
-        title: 'Utilisateur connecté',
-        description: `${message.username} a rejoint le chat`,
-      });
     } else if (message.type === 'user_left') {
       setOnlineUsers(message.online_users || []);
     } else if (message.type === 'typing') {
@@ -87,6 +95,11 @@ export function ChatArea({ channelId, onStartCall }: ChatAreaProps) {
           newSet.delete(message.user_id!);
           return newSet;
         });
+      }
+    } else if (message.type === 'message_deleted') {
+      // Handle deleted message from broadcast
+      if (message.message_id) {
+          setMessages((prev) => prev.filter(m => m.id !== message.message_id));
       }
     }
   }
@@ -172,6 +185,94 @@ export function ChatArea({ channelId, onStartCall }: ChatAreaProps) {
     }, 2000);
   };
 
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !currentUser || !channelId) return;
+
+    try {
+        const uploadedFile = await api.uploadFile(file, currentUser.id);
+        const channelIdNum = parseInt(channelId);
+        
+        // Send file message via WebSocket
+        sendChatMessage(channelIdNum, file.name, 'file', uploadedFile.id);
+        toast({ title: 'Fichier envoyé', description: file.name });
+    } catch (error) {
+        console.error('File upload failed:', error);
+        toast({ title: 'Erreur', description: "L'envoi du fichier a échoué", variant: 'destructive' });
+    }
+    
+    // Reset input
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const toggleRecording = async () => {
+      if (isRecording) {
+            stopRecording();
+      } else {
+            startRecording();
+      }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const audioFile = new File([audioBlob], `voice-message-${Date.now()}.webm`, { type: 'audio/webm' });
+        
+        if (!currentUser || !channelId) return;
+        
+        try {
+            const uploadedFile = await api.uploadFile(audioFile, currentUser.id);
+            const channelIdNum = parseInt(channelId);
+            sendChatMessage(channelIdNum, 'Message vocal', 'audio', uploadedFile.id);
+             toast({ title: 'Message vocal envoyé' });
+        } catch (error) {
+            console.error('Audio upload failed:', error);
+             toast({ title: 'Erreur', description: "L'envoi du vocal a échoué", variant: 'destructive' });
+        }
+        
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      console.error('Error accessing microphone:', error);
+      toast({ title: 'Erreur', description: "Impossible d'accéder au microphone", variant: 'destructive' });
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const handleDeleteMessage = async (messageId: string) => {
+      try {
+          await api.deleteMessage(parseInt(messageId));
+          // Optimistic update
+          setMessages(prev => prev.filter(m => m.id.toString() !== messageId));
+          toast({ title: 'Message supprimé' });
+      } catch (error) {
+          console.error("Failed to delete message:", error);
+          toast({ title: 'Erreur', description: 'Impossible de supprimer le message', variant: 'destructive' });
+      }
+  };
+
   const formatTime = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
@@ -245,14 +346,11 @@ export function ChatArea({ channelId, onStartCall }: ChatAreaProps) {
                 type: (message.message_type as 'text' | 'file' | 'audio' | 'system') || 'text' 
               }}
               isOwnMessage={isSelf}
-              onDelete={(id) => {
-                // TODO: Implement message deletion
-                console.log('Delete message:', id);
-              }}
+              onDelete={handleDeleteMessage}
             >
               <div
                 className={cn(
-                  'flex gap-3 animate-fade-in',
+                  'flex gap-3 animate-fade-in group',
                   isSelf ? 'flex-row-reverse' : 'flex-row'
                 )}
               >
@@ -264,7 +362,7 @@ export function ChatArea({ channelId, onStartCall }: ChatAreaProps) {
                   />
                 </div>
                 <div
-                  className={cn('flex flex-col gap-1', isSelf ? 'items-end' : 'items-start')}
+                  className={cn('flex flex-col gap-1 max-w-[70%]', isSelf ? 'items-end' : 'items-start')}
                 >
                   {showAvatar && (
                     <div
@@ -278,7 +376,39 @@ export function ChatArea({ channelId, onStartCall }: ChatAreaProps) {
                     </div>
                   )}
                   <div className={cn('nm-message-bubble', isSelf ? 'nm-message-self' : 'nm-message-other')}>
-                    <p className="text-sm leading-relaxed">{message.content}</p>
+                    {message.message_type === 'text' && (
+                        <div className="text-sm leading-relaxed prose prose-invert max-w-none prose-p:my-0 prose-pre:bg-black/20 prose-pre:p-2 prose-pre:rounded">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {message.content}
+                            </ReactMarkdown>
+                        </div>
+                    )}
+                    {message.message_type === 'file' && message.file_id && (
+                        <div className="flex items-center gap-3 p-1">
+                            <div className="w-10 h-10 rounded bg-background/20 flex items-center justify-center">
+                                <FileText className="w-6 h-6" />
+                            </div>
+                            <div className="flex flex-col overflow-hidden">
+                                <span className="text-sm font-medium truncate max-w-[150px]">{message.content}</span>
+                                <a 
+                                    href={api.getFileDownloadUrl(message.file_id)} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="text-xs opacity-80 hover:underline flex items-center gap-1"
+                                >
+                                    <Download className="w-3 h-3" /> Télécharger
+                                </a>
+                            </div>
+                        </div>
+                    )}
+                    {message.message_type === 'audio' && message.file_id && (
+                        <div className="flex items-center gap-2 min-w-[200px]">
+                            <audio controls className="h-8 w-full max-w-[240px] rounded">
+                                <source src={api.getFileDownloadUrl(message.file_id)} type="audio/webm" />
+                                Your browser does not support the audio element.
+                            </audio>
+                        </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -303,8 +433,18 @@ export function ChatArea({ channelId, onStartCall }: ChatAreaProps) {
 
       {/* Input */}
       <div className="p-4 border-t border-border bg-card/50 backdrop-blur-sm">
+        <input 
+            type="file" 
+            ref={fileInputRef} 
+            className="hidden" 
+            onChange={handleFileUpload}
+        />
         <div className="flex items-center gap-3">
-          <button className="p-2.5 hover:bg-secondary rounded-lg transition-colors text-muted-foreground hover:text-foreground">
+          <button 
+            onClick={() => fileInputRef.current?.click()}
+            className="p-2.5 hover:bg-secondary rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+            title="Envoyer un fichier"
+          >
             <Paperclip className="w-5 h-5" />
           </button>
           <div className="flex-1 relative">
@@ -313,22 +453,60 @@ export function ChatArea({ channelId, onStartCall }: ChatAreaProps) {
               value={newMessage}
               onChange={handleTyping}
               onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              placeholder={`Message dans #${channelId === 'general' ? 'général' : channelId}...`}
-              className="w-full bg-secondary border-0 rounded-xl py-3 px-4 pr-24 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
-              disabled={!isConnected}
+              placeholder={isRecording ? "Enregistrement en cours..." : `Message dans #${currentChannel?.name || channelId}...`}
+              className={cn(
+                  "w-full bg-secondary border-0 rounded-xl py-3 px-4 pr-24 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all",
+                  isRecording && "ring-2 ring-red-500/50 bg-red-500/5 pl-10"
+              )}
+              disabled={!isConnected && !isRecording}
             />
+            {isRecording && (
+                <div className="absolute left-3 top-1/2 -translate-y-1/2">
+                    <span className="w-3 h-3 bg-red-500 rounded-full animate-pulse block" />
+                </div>
+            )}
             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-              <button className="p-2 hover:bg-secondary-foreground/10 rounded-lg transition-colors text-muted-foreground hover:text-foreground">
-                <Smile className="w-5 h-5" />
-              </button>
-              <button className="p-2 hover:bg-secondary-foreground/10 rounded-lg transition-colors text-muted-foreground hover:text-foreground">
-                <Mic className="w-5 h-5" />
+              <Popover>
+                <PopoverTrigger asChild>
+                    <button 
+                        className="p-2 hover:bg-secondary-foreground/10 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+                        title="Emoji"
+                    >
+                        <Smile className="w-5 h-5" />
+                    </button>
+                </PopoverTrigger>
+                <PopoverContent className="w-64 p-2 bg-popover border-border shadow-lg rounded-xl">
+                    <div className="grid grid-cols-6 gap-2">
+                        {COMMON_EMOJIS.map(emoji => (
+                            <button 
+                                key={emoji}
+                                onClick={() => setNewMessage(prev => prev + emoji)}
+                                className="text-xl hover:bg-secondary rounded p-1 transition-colors"
+                            >
+                                {emoji}
+                            </button>
+                        ))}
+                    </div>
+                </PopoverContent>
+              </Popover>
+              
+              <button 
+                onClick={toggleRecording}
+                className={cn(
+                    "p-2 rounded-lg transition-colors text-muted-foreground hover:text-foreground",
+                    isRecording 
+                        ? "bg-red-500 text-white hover:bg-red-600 animate-pulse" 
+                        : "hover:bg-secondary-foreground/10"
+                )}
+                title={isRecording ? "Arrêter l'enregistrement" : "Enregistrer un message vocal"}
+              >
+                {isRecording ? <StopCircle className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
               </button>
             </div>
           </div>
           <button
             onClick={handleSend}
-            disabled={!newMessage.trim() || !isConnected}
+            disabled={(!newMessage.trim() && !isRecording) || !isConnected}
             className="p-3 bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:hover:bg-primary text-primary-foreground rounded-xl transition-all nm-glow"
           >
             <Send className="w-5 h-5" />

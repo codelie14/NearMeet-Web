@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ArrowLeft, User, Bell, Palette, Volume2, Shield, Info, Check } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { ArrowLeft, User, Bell, Palette, Volume2, Shield, Info, Check, Upload } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
@@ -8,18 +8,23 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { UserAvatar } from '@/components/UserAvatar';
-import { currentUser } from '@/data/mockData';
-import { toast } from 'sonner';
+import { useUser } from '@/lib/userStore';
+import { api } from '@/lib/api';
+import { toast } from '@/hooks/use-toast';
 
 type SettingsTab = 'profile' | 'notifications' | 'appearance' | 'audio' | 'privacy' | 'about';
 
 const Settings = () => {
   const navigate = useNavigate();
+  const { currentUser, setCurrentUser } = useUser();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  
   const [activeTab, setActiveTab] = useState<SettingsTab>('profile');
   
   // Profile settings
-  const [displayName, setDisplayName] = useState(currentUser.name);
+  const [displayName, setDisplayName] = useState('');
   const [status, setStatus] = useState<'online' | 'away' | 'busy' | 'offline'>('online');
+  const [avatarUrl, setAvatarUrl] = useState('');
   
   // Notification settings
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
@@ -42,6 +47,30 @@ const Settings = () => {
   const [showOnlineStatus, setShowOnlineStatus] = useState(true);
   const [allowDMs, setAllowDMs] = useState(true);
 
+  // Initialize state from current user
+  useEffect(() => {
+    if (currentUser) {
+      setDisplayName(currentUser.username);
+      setStatus((currentUser.status as any) || 'online');
+      setAvatarUrl(currentUser.avatar_url || '');
+    }
+  }, [currentUser]);
+
+  // Apply theme effect
+  useEffect(() => {
+    const root = window.document.documentElement;
+    root.classList.remove('light', 'dark');
+
+    if (theme === 'system') {
+      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches
+        ? 'dark'
+        : 'light';
+      root.classList.add(systemTheme);
+    } else {
+      root.classList.add(theme);
+    }
+  }, [theme]);
+
   const tabs = [
     { id: 'profile' as SettingsTab, label: 'Profil', icon: User },
     { id: 'notifications' as SettingsTab, label: 'Notifications', icon: Bell },
@@ -51,12 +80,44 @@ const Settings = () => {
     { id: 'about' as SettingsTab, label: 'À propos', icon: Info },
   ];
 
-  const handleSave = () => {
-    toast.success('Paramètres enregistrés !');
+  const handleSaveProfile = async () => {
+    if (!currentUser) return;
+    try {
+        const updatedUser = await api.updateUser(currentUser.id, {
+            username: displayName,
+            status: status,
+            avatar_url: avatarUrl
+        });
+        setCurrentUser(updatedUser);
+        toast({ title: 'Profil mis à jour', description: 'Vos modifications ont été enregistrées.' });
+    } catch (error) {
+        console.error('Failed to update profile:', error);
+        toast({ title: 'Erreur', description: 'Impossible de mettre à jour le profil.', variant: 'destructive' });
+    }
+  };
+
+  const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file || !currentUser) return;
+
+      try {
+          const uploadedFile = await api.uploadFile(file, currentUser.id);
+          const fullUrl = api.getFileDownloadUrl(uploadedFile.id);
+          setAvatarUrl(fullUrl);
+          
+          // Auto-save avatar update
+          const updatedUser = await api.updateUser(currentUser.id, { avatar_url: fullUrl });
+          setCurrentUser(updatedUser);
+          
+          toast({ title: 'Avatar mis à jour' });
+      } catch (error) {
+          console.error('Failed to upload avatar:', error);
+          toast({ title: 'Erreur', description: "L'upload de l'avatar a échoué.", variant: 'destructive' });
+      }
   };
 
   return (
-    <div className="h-screen w-screen flex bg-background">
+    <div className="h-screen w-screen flex bg-background text-foreground">
       {/* Sidebar */}
       <aside className="w-64 bg-sidebar border-r border-border flex flex-col">
         <div className="p-4 border-b border-border">
@@ -91,7 +152,7 @@ const Settings = () => {
       </aside>
 
       {/* Content */}
-      <main className="flex-1 overflow-y-auto nm-scrollbar">
+      <main className="flex-1 overflow-y-auto nm-scrollbar bg-background">
         <div className="max-w-2xl mx-auto p-8">
           {activeTab === 'profile' && (
             <div className="space-y-6">
@@ -103,9 +164,28 @@ const Settings = () => {
               <Separator />
               
               <div className="flex items-center gap-6">
-                <UserAvatar user={currentUser} size="lg" showStatus />
+                <UserAvatar 
+                    user={{ 
+                        id: currentUser?.id.toString() || '0', 
+                        name: displayName || currentUser?.username || 'User', 
+                        avatar: avatarUrl || currentUser?.avatar_url || '', 
+                        status: status as any 
+                    }} 
+                    size="lg" 
+                    showStatus 
+                />
                 <div>
-                  <Button variant="outline" size="sm">Changer l'avatar</Button>
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    className="hidden" 
+                    accept="image/*"
+                    onChange={handleAvatarUpload}
+                  />
+                  <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                    <Upload className="w-4 h-4 mr-2" />
+                    Changer l'avatar
+                  </Button>
                 </div>
               </div>
               
@@ -143,7 +223,7 @@ const Settings = () => {
                 </div>
               </div>
               
-              <Button onClick={handleSave} className="nm-glow">
+              <Button onClick={handleSaveProfile} className="nm-glow">
                 <Check className="w-4 h-4 mr-2" />
                 Enregistrer
               </Button>

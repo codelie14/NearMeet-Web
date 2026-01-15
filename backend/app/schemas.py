@@ -14,12 +14,20 @@ class UserCreate(BaseModel):
 class UserResponse(BaseModel):
     id: int
     username: str
+    avatar_url: Optional[str] = None
+    status: str = "online"
     created_at: datetime
     last_seen: datetime
     is_online: bool
 
     class Config:
         from_attributes = True
+
+
+class UserUpdate(BaseModel):
+    username: Optional[str] = Field(None, min_length=3, max_length=50)
+    avatar_url: Optional[str] = None
+    status: Optional[str] = None
 
 
 # Channel Schemas
