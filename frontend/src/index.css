@@ -1,0 +1,161 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* NearMeet Design System - Dark Theme (Primary) */
+    --background: 222 47% 11%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 14%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 14%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 187 85% 53%;
+    --primary-foreground: 222 47% 11%;
+
+    --secondary: 222 47% 18%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 222 47% 18%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 187 85% 53%;
+    --accent-foreground: 222 47% 11%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+
+    --success: 142 76% 36%;
+    --success-foreground: 210 40% 98%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 222 47% 11%;
+
+    --border: 222 47% 22%;
+    --input: 222 47% 22%;
+    --ring: 187 85% 53%;
+
+    --radius: 0.75rem;
+
+    /* Custom NearMeet tokens */
+    --nm-sidebar: 222 47% 9%;
+    --nm-chat-bubble-self: 187 85% 35%;
+    --nm-chat-bubble-other: 222 47% 18%;
+    --nm-online: 142 76% 45%;
+    --nm-away: 38 92% 50%;
+    --nm-busy: 0 84% 60%;
+    --nm-offline: 222 47% 35%;
+
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(187 85% 53%) 0%, hsl(200 85% 45%) 100%);
+    --gradient-card: linear-gradient(180deg, hsl(222 47% 16%) 0%, hsl(222 47% 12%) 100%);
+    --gradient-glow: radial-gradient(circle at center, hsl(187 85% 53% / 0.15) 0%, transparent 70%);
+
+    /* Shadows */
+    --shadow-soft: 0 4px 20px -2px hsl(222 47% 5% / 0.5);
+    --shadow-glow: 0 0 30px -5px hsl(187 85% 53% / 0.3);
+
+    --sidebar-background: 222 47% 9%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 187 85% 53%;
+    --sidebar-primary-foreground: 222 47% 11%;
+    --sidebar-accent: 222 47% 16%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 222 47% 18%;
+    --sidebar-ring: 187 85% 53%;
+  }
+
+  .dark {
+    /* Dark mode is the default for NearMeet */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+  }
+}
+
+@layer components {
+  .nm-glass {
+    @apply bg-card/80 backdrop-blur-xl border border-border/50;
+  }
+
+  .nm-gradient-text {
+    @apply bg-clip-text text-transparent;
+    background-image: var(--gradient-primary);
+  }
+
+  .nm-glow {
+    box-shadow: var(--shadow-glow);
+  }
+
+  .nm-message-bubble {
+    @apply rounded-2xl px-4 py-2.5 max-w-[75%];
+  }
+
+  .nm-message-self {
+    @apply bg-primary text-primary-foreground rounded-br-md;
+  }
+
+  .nm-message-other {
+    @apply bg-secondary text-secondary-foreground rounded-bl-md;
+  }
+
+  .nm-status-indicator {
+    @apply w-3 h-3 rounded-full border-2 border-background;
+  }
+
+  .nm-sidebar-item {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 hover:bg-secondary cursor-pointer;
+  }
+
+  .nm-sidebar-item-active {
+    @apply bg-secondary nm-glow;
+  }
+}
+
+@layer utilities {
+  .nm-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .nm-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .nm-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .nm-scrollbar::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+
+  .nm-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+}
